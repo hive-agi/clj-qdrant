@@ -153,26 +153,66 @@
     (cond-> {:payload decoded}
       id (assoc :id id))))
 
+(def ^:private scroll-page-size
+  "Per-page internal limit for paginated scroll. Keeps individual gRPC
+   responses small; the user-visible :limit is honored by the accumulator."
+  32)
+
+(defn- scroll-page
+  "One gRPC scroll round-trip. Returns {:points [raw-points] :next-offset id-or-nil}."
+  [client collection filter page-limit offset]
+  (let [b (-> (Points$ScrollPoints/newBuilder)
+              (.setCollectionName ^String collection)
+              (.setLimit (int page-limit))
+              (.setWithPayload (-> (Points$WithPayloadSelector/newBuilder)
+                                   (.setEnable true)
+                                   .build)))]
+    (when filter (.setFilter b filter))
+    (when offset (.setOffset b offset))
+    (let [resp     (.get (.scrollAsync client (.build b)))
+          points   (try (.getResultList resp) (catch Throwable _ []))
+          next-off (try
+                     (when (.hasNextPageOffset resp)
+                       (.getNextPageOffset resp))
+                     (catch Throwable _ nil))]
+      {:points points :next-offset next-off})))
+
+(defn- paginate-scroll
+  "Loop `scroll-fn` until `limit` points accumulated or no next-offset.
+   `scroll-fn`: (fn [offset page-limit]) -> {:points coll :next-offset id-or-nil}.
+   Returns a vec of raw (undecoded) points."
+  [scroll-fn limit page-size]
+  (loop [offset nil
+         acc    []]
+    (let [remaining (- limit (count acc))]
+      (if (<= remaining 0)
+        acc
+        (let [page-limit            (min page-size remaining)
+              {:keys [points
+                      next-offset]} (scroll-fn offset page-limit)
+              acc'                  (into acc points)]
+          (if (and next-offset (seq points))
+            (recur next-offset acc')
+            acc'))))))
+
 (defn scroll-points
   "Paginated scroll over a collection.
 
+   Loops internally on ScrollResponse.getNextPageOffset, paging at
+   `scroll-page-size` per gRPC round-trip. Accumulates until the user's
+   :limit is reached or there is no next-page-offset.
+
    kw-args:
      :collection — collection name (required)
-     :limit      — page size (default 100)
+     :limit      — total points to return (default 100)
      :filter     — optional Common$Filter built via ->filter
 
    Returns {:collection :count :points} where :points is a vec of point->map."
   [{:keys [client]} & {:keys [collection limit filter]
                        :or   {limit 100}}]
-  (let [b (-> (Points$ScrollPoints/newBuilder)
-              (.setCollectionName ^String collection)
-              (.setLimit (int limit))
-              (.setWithPayload (-> (Points$WithPayloadSelector/newBuilder)
-                                   (.setEnable true)
-                                   .build)))]
-    (when filter (.setFilter b filter))
-    (let [resp   (.get (.scrollAsync client (.build b)))
-          points (try (.getResultList resp) (catch Throwable _ []))]
-      {:collection collection
-       :count      (count points)
-       :points     (mapv point->map points)})))
+  (let [scroll-fn (fn [offset page-limit]
+                    (scroll-page client collection filter page-limit offset))
+        raw       (paginate-scroll scroll-fn limit scroll-page-size)]
+    {:collection collection
+     :count      (count raw)
+     :points     (mapv point->map raw)}))
