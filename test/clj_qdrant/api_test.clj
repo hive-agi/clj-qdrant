@@ -68,6 +68,24 @@
     (let [scroll-fn (fn [_ _] {:points [] :next-offset :bogus})]
       (is (= [] (#'api/paginate-scroll scroll-fn 100 32))))))
 
+(deftest with-payload-selector-enable-when-empty
+  (testing "nil/empty payload-includes -> enable=true selector (full payload)"
+    (let [sel (#'api/->with-payload-selector nil)]
+      (is (true? (.getEnable sel)))
+      (is (false? (.hasInclude sel))))
+    (let [sel (#'api/->with-payload-selector [])]
+      (is (true? (.getEnable sel)))
+      (is (false? (.hasInclude sel))))))
+
+(deftest with-payload-selector-include-projection
+  (testing "non-empty payload-includes -> PayloadIncludeSelector with fields"
+    (let [sel    (#'api/->with-payload-selector ["type" :tags "project-id"])
+          fields (vec (.. sel getInclude getFieldsList))]
+      (is (true? (.hasInclude sel)))
+      (is (= ["type" "tags" "project-id"] fields))
+      (is (false? (.getEnable sel))
+          "enable oneof cleared when include set"))))
+
 (deftest ^:integration upsert-live
   ;; Requires a live qdrant at localhost:6334 — run explicitly:
   ;;   clj -M:test -i :integration

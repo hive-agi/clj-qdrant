@@ -7,6 +7,7 @@
   (:import [io.qdrant.client ConditionFactory PointIdFactory ValueFactory VectorsFactory]
            [io.qdrant.client.grpc Common$Filter
                                   JsonWithInt$Value
+                                  Points$PayloadIncludeSelector
                                   Points$PointStruct
                                   Points$ScrollPoints
                                   Points$SearchPoints
@@ -158,15 +159,33 @@
    responses small; the user-visible :limit is honored by the accumulator."
   32)
 
+(defn- ->with-payload-selector
+  "Build a Points$WithPayloadSelector.
+
+   `payload-includes` — seq of field names (string/keyword). When seq is
+   non-empty, wire a PayloadIncludeSelector so qdrant returns only those
+   payload keys. When nil/empty, fall back to full-payload (:enable true)."
+  [payload-includes]
+  (let [b (Points$WithPayloadSelector/newBuilder)]
+    (if (seq payload-includes)
+      (let [fields (mapv name payload-includes)
+            inc    (-> (Points$PayloadIncludeSelector/newBuilder)
+                       (.addAllFields fields)
+                       .build)]
+        (.setInclude b inc))
+      (.setEnable b true))
+    (.build b)))
+
 (defn- scroll-page
-  "One gRPC scroll round-trip. Returns {:points [raw-points] :next-offset id-or-nil}."
-  [client collection filter page-limit offset]
+  "One gRPC scroll round-trip. Returns {:points [raw-points] :next-offset id-or-nil}.
+
+   `payload-includes` (optional) — vec of string/keyword field names. When
+   provided, qdrant responds with only those payload keys (projection)."
+  [client collection filter page-limit offset payload-includes]
   (let [b (-> (Points$ScrollPoints/newBuilder)
               (.setCollectionName ^String collection)
               (.setLimit (int page-limit))
-              (.setWithPayload (-> (Points$WithPayloadSelector/newBuilder)
-                                   (.setEnable true)
-                                   .build)))]
+              (.setWithPayload (->with-payload-selector payload-includes)))]
     (when filter (.setFilter b filter))
     (when offset (.setOffset b offset))
     (let [resp     (.get (.scrollAsync client (.build b)))
@@ -203,15 +222,20 @@
    :limit is reached or there is no next-page-offset.
 
    kw-args:
-     :collection — collection name (required)
-     :limit      — total points to return (default 100)
-     :filter     — optional Common$Filter built via ->filter
+     :collection       — collection name (required)
+     :limit            — total points to return (default 100)
+     :filter           — optional Common$Filter built via ->filter
+     :payload-includes — optional vec of field names (string/keyword).
+                         When non-empty, qdrant returns ONLY those payload
+                         keys (server-side projection). Defaults to full
+                         payload when nil/empty.
 
    Returns {:collection :count :points} where :points is a vec of point->map."
-  [{:keys [client]} & {:keys [collection limit filter]
+  [{:keys [client]} & {:keys [collection limit filter payload-includes]
                        :or   {limit 100}}]
   (let [scroll-fn (fn [offset page-limit]
-                    (scroll-page client collection filter page-limit offset))
+                    (scroll-page client collection filter
+                                 page-limit offset payload-includes))
         raw       (paginate-scroll scroll-fn limit scroll-page-size)]
     {:collection collection
      :count      (count raw)
