@@ -1,12 +1,97 @@
 (ns clj-qdrant.api-test
   (:require [clojure.test :refer [deftest testing is]]
-            [clj-qdrant.api :as api]))
+            [clojure.reflect :as reflect]
+            [clj-qdrant.api :as api])
+  (:import [io.qdrant.client.grpc Common$PointId]
+           [java.util.concurrent CompletableFuture]))
 
 (deftest point-id-coercion
   (testing "integer and uuid-string ids coerce to PointId"
     (is (some? (#'api/->point-id 42)))
     (is (some? (#'api/->point-id "550e8400-e29b-41d4-a716-446655440000")))
     (is (some? (#'api/->point-id (java.util.UUID/randomUUID))))))
+
+(deftest point-id-roundtrip
+  (testing "uuid roundtrip: UUID instance -> PointId -> .getUuid equals original"
+    (let [u   (java.util.UUID/randomUUID)
+          pid (#'api/->point-id u)]
+      (is (instance? Common$PointId pid))
+      (is (= (str u) (.getUuid pid)))))
+  (testing "uuid-string roundtrip: String -> PointId -> .getUuid equals original"
+    (let [s   "550e8400-e29b-41d4-a716-446655440000"
+          pid (#'api/->point-id s)]
+      (is (instance? Common$PointId pid))
+      (is (= s (.getUuid pid)))))
+  (testing "integer roundtrip: Long -> PointId -> .getNum equals original"
+    (let [pid (#'api/->point-id 42)]
+      (is (instance? Common$PointId pid))
+      (is (= 42 (.getNum pid))))))
+
+;; ---------------------------------------------------------------------------
+;; Reflection guard for the get-points retrieveAsync overload.
+;; This test fails loudly if the SDK ever drops the 5-arg overload
+;; `(String, List, boolean, boolean, ReadConsistency)` that api/get-points
+;; currently targets.
+;; ---------------------------------------------------------------------------
+
+(defn- retrieve-async-overloads
+  "Return set of parameter-type vectors for all `retrieveAsync` methods
+   exposed on io.qdrant.client.QdrantClient."
+  []
+  (->> (:members (reflect/reflect io.qdrant.client.QdrantClient))
+       (filter #(= 'retrieveAsync (:name %)))
+       (map :parameter-types)
+       (map vec)
+       set))
+
+(deftest qdrant-client-has-expected-retrieve-async-overload
+  (testing "io.qdrant.client.QdrantClient exposes the 5-arg retrieveAsync
+            (String, List, boolean, boolean, ReadConsistency) overload
+            that api/get-points targets"
+    (let [expected '[java.lang.String
+                     java.util.List
+                     boolean
+                     boolean
+                     io.qdrant.client.grpc.Points$ReadConsistency]]
+      (is (contains? (retrieve-async-overloads) expected)
+          (str "api/get-points calls retrieveAsync with a signature that "
+               "must match a real overload. Seen: "
+               (retrieve-async-overloads))))))
+
+(definterface IRetrieveStub
+  (^java.util.concurrent.Future
+    retrieveAsync [^String collection
+                   ^java.util.List ids
+                   ^boolean withPayload
+                   ^boolean withVectors
+                   consistency]))
+
+(deftype RetrieveStubClient [captured]
+  IRetrieveStub
+  (retrieveAsync [_ collection ids with-payload with-vectors consistency]
+    (reset! captured {:collection   collection
+                      :ids          (vec ids)
+                      :with-payload with-payload
+                      :with-vectors with-vectors
+                      :consistency  consistency})
+    (doto (CompletableFuture.) (.complete []))))
+
+(deftest get-points-invokes-retrieve-async-with-live-overload
+  (testing "get-points does not throw arity-mismatch against a client that
+            implements only the 5-arg retrieveAsync overload"
+    (let [captured (atom nil)
+          stub     (->RetrieveStubClient captured)
+          result   (api/get-points {:client stub}
+                                   :collection "c"
+                                   :ids [1 2 3])]
+      (is (= "c" (:collection result)))
+      (is (= [] (:points result)))
+      (is (= "c" (:collection @captured)))
+      (is (= 3 (count (:ids @captured))))
+      (is (every? #(instance? Common$PointId %) (:ids @captured)))
+      (is (true? (:with-payload @captured)))
+      (is (true? (:with-vectors @captured)))
+      (is (nil? (:consistency @captured))))))
 
 (deftest value-coercion
   (testing "primitives coerce to qdrant Value"

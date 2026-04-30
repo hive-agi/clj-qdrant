@@ -9,6 +9,7 @@
                                   JsonWithInt$Value
                                   Points$PayloadIncludeSelector
                                   Points$PointStruct
+                                  Points$ReadConsistency
                                   Points$ScrollPoints
                                   Points$SearchPoints
                                   Points$WithPayloadSelector]))
@@ -99,10 +100,12 @@
 
    kw-args: :collection :ids"
   [{:keys [client]} & {:keys [collection ids]}]
-  (let [res (.get (.retrieveAsync client
+  (let [^Points$ReadConsistency consistency nil
+        res (.get (.retrieveAsync client
                                   ^String collection
                                   (mapv ->point-id ids)
-                                  true true))]
+                                  true true
+                                  consistency))]
     {:collection collection
      :points     (vec res)}))
 
