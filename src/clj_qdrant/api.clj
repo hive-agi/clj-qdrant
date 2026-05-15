@@ -113,19 +113,43 @@
   "Build a Common$Filter from a map of must-conditions.
 
    opts:
-     :must-keyword {field-name [string ...]}  — match-any-keyword per field
-     :must-keywords-all [{:field f :value v}] — AND of single-keyword matches
+     :must-keyword     {field-name [string ...]}  — AND of single-keyword
+                                                    matches per value (one
+                                                    qdrant Condition per
+                                                    keyword); appropriate for
+                                                    list-of-tags fields where
+                                                    the caller wants every
+                                                    listed tag present.
+     :must-match-any   {field-name [string ...]}  — OR over the list via
+                                                    qdrant `matchKeywords`
+                                                    (MatchAny). Use for
+                                                    single-valued fields like
+                                                    :project-id where the
+                                                    caller wants entries
+                                                    matching ANY of the
+                                                    listed values.
+     :must-keywords-all [{:field f :value v}]     — AND of single-keyword
+                                                    matches (explicit form).
 
    Returns a Common$Filter or nil if no conditions provided."
-  [{:keys [must-keyword must-keywords-all]}]
+  [{:keys [must-keyword must-match-any must-keywords-all]}]
   (let [b (Common$Filter/newBuilder)
         any-added? (atom false)]
     (doseq [[field values] must-keyword
             :when (seq values)]
-      ;; matchKeywords is OR over the list — for AND-of-tags we add one Condition per tag.
+      ;; Per-value matchKeyword loop = AND-of-keywords. Each Condition is a
+      ;; separate MUST clause, so an entry must match every value.
       (doseq [v values]
         (.addMust b (ConditionFactory/matchKeyword (name field) ^String v))
         (reset! any-added? true)))
+    (doseq [[field values] must-match-any
+            :when (seq values)]
+      ;; matchKeywords (plural) = MatchAny = OR-of-keywords on a single
+      ;; field. One MUST clause whose match expression accepts any of the
+      ;; supplied values. Required for HCR multi-scope `:project-id IN [...]`.
+      (.addMust b (ConditionFactory/matchKeywords (name field)
+                                                  ^java.util.List (mapv str values)))
+      (reset! any-added? true))
     (doseq [{:keys [field value]} must-keywords-all]
       (.addMust b (ConditionFactory/matchKeyword (name field) ^String value))
       (reset! any-added? true))
