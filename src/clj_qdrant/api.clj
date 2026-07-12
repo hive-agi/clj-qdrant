@@ -69,21 +69,39 @@
      :count      (count points)
      :operation  :upsert}))
 
+(declare ->with-payload-selector scored-point->map)
+
 (defn search-points
   "Vector similarity search.
 
-   kw-args: :collection :vector :limit [:with-payload?]"
-  [{:keys [client]} & {:keys [collection vector limit]
-                       :or   {limit 10}}]
-  (let [req (-> (Points$SearchPoints/newBuilder)
-                (.setCollectionName ^String collection)
-                (.addAllVector (map float vector))
-                (.setLimit (long limit))
-                .build)
-        res (.get (.searchAsync client req))]
-    {:collection collection
-     :count      (count res)
-     :results    (vec res)}))
+   kw-args:
+     :collection       — collection name (required)
+     :vector           — query vector (required)
+     :limit            — max points (default 10)
+     :filter           — optional Common$Filter (build via `->filter`)
+     :with-payload?    — request the point payload (default true)
+     :payload-includes — optional field-name projection (implies payload)
+
+   qdrant's gRPC default is with_payload=false: without an explicit
+   WithPayloadSelector a ScoredPoint carries only id+score, so any
+   downstream decode loses :tags/:content. Payload is requested by default.
+
+   Returns {:collection :count :results} where :results is a vec of
+   `scored-point->map` — {:id :payload :score}. Raw protobuf never escapes
+   this boundary (mirrors `scroll-points`)."
+  [{:keys [client]} & {:keys [collection vector limit filter with-payload? payload-includes]
+                       :or   {limit 10 with-payload? true}}]
+  (let [b (-> (Points$SearchPoints/newBuilder)
+              (.setCollectionName ^String collection)
+              (.addAllVector (map float vector))
+              (.setLimit (long limit)))]
+    (when (or with-payload? (seq payload-includes))
+      (.setWithPayload b (->with-payload-selector payload-includes)))
+    (when filter (.setFilter b filter))
+    (let [res (.get (.searchAsync client (.build b)))]
+      {:collection collection
+       :count      (count res)
+       :results    (mapv scored-point->map res)})))
 
 (defn delete-points
   "Delete points by id list.
@@ -177,9 +195,23 @@
         decoded (reduce-kv (fn [m k v] (assoc m (keyword k) (value->clj v)))
                            {}
                            (into {} payload))
-        id      (try (.. point getId getUuid) (catch Throwable _ nil))]
+        id      (try (.. point getId getUuid) (catch Throwable _ nil))
+        ;; ScoredPoint carries a similarity score; RetrievedPoint does not
+        ;; (the method is absent → caught → nil, so no :score key).
+        score   (try (.getScore point) (catch Throwable _ nil))]
     (cond-> {:payload decoded}
-      id (assoc :id id))))
+      id    (assoc :id id)
+      score (assoc :score score))))
+
+(defn scored-point->map
+  "Convert a qdrant ScoredPoint into {:id :payload :score}.
+
+   `point->map` deliberately drops the score (RetrievedPoint has none); a
+   similarity search whose rows lost their score is unrankable, so the
+   search boundary decodes through this fn instead."
+  [point]
+  (assoc (point->map point)
+         :score (try (.getScore point) (catch Throwable _ nil))))
 
 (def ^:private scroll-page-size
   "Per-page internal limit for paginated scroll. Keeps individual gRPC
