@@ -1,92 +1,53 @@
-name: Release
+name: release
 
+# Patch-bump and publish only when the push actually changes the library.
+# README / CI / test-only commits do not mint a version, because a published
+# pom is immutable on both Clojars and the private registry.
 on:
   push:
     branches: [main]
+    paths:
+      - 'src/**'
+      - 'resources/**'
+      - 'deps.edn'
   workflow_dispatch:
 
-permissions:
-  contents: write
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   release:
-    name: Tag & Release
     runs-on: ubuntu-latest
-    env:
-      CLOJARS_USERNAME: ${{ secrets.CLOJARS_USERNAME }}
-      CLOJARS_PASSWORD: ${{ secrets.CLOJARS_DEPLOY_TOKEN }}
+    permissions:
+      contents: write
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Read version
-        id: version
-        run: |
-          if [ ! -f VERSION ]; then
-            echo "::error::VERSION file not found"
-            exit 1
-          fi
-          VERSION=$(tr -d '[:space:]' < VERSION)
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
-
-      # Tagging and Clojars publication are gated INDEPENDENTLY. A repo can
-      # already carry its tag while never having been published to Clojars, so a
-      # single tag-based gate would silently skip the deploy forever.
-      - name: Check if tag exists
-        id: tag
-        run: |
-          if git rev-parse "${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Check if version is on Clojars
-        id: clojars
-        run: |
-          V="${{ steps.version.outputs.version }}"
-          URL="https://repo.clojars.org/io/github/hive-agi/clj-qdrant/${V}/clj-qdrant-${V}.pom"
-          if curl -sfI "$URL" -o /dev/null; then
-            echo "published=true" >> "$GITHUB_OUTPUT"
-            echo "$LIB $V is already on Clojars — deploy will be skipped (Clojars releases are immutable)."
-          else
-            echo "published=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Setup Java
-        if: steps.tag.outputs.exists == 'false' || steps.clojars.outputs.published == 'false'
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '21'
-
-      - name: Setup Clojure
-        if: steps.tag.outputs.exists == 'false' || steps.clojars.outputs.published == 'false'
-        uses: DeLaGuardo/setup-clojure@12.5
+      - uses: DeLaGuardo/setup-clojure@13.0
         with:
           cli: latest
 
-      - name: Build jar
-        if: steps.tag.outputs.exists == 'false' || steps.clojars.outputs.published == 'false'
-        run: clojure -T:build jar
+      - name: Bump patch version
+        run: clojure -T:build bump :level :patch
 
-      - name: Create tag
-        if: steps.tag.outputs.exists == 'false'
+      - name: Commit and tag
         run: |
-          git tag "${{ steps.version.outputs.tag }}"
-          git push origin "${{ steps.version.outputs.tag }}"
+          VER=$(cat VERSION)
+          git config user.name  "hive-ci"
+          git config user.email "ci@hive-agi.local"
+          git add VERSION
+          # [skip ci] stops this push from retriggering the workflow.
+          git commit -m "chore(release): $VER [skip ci]"
+          # Annotated: `git push --follow-tags` ignores lightweight tags,
+          # which would publish the artifact and silently drop the tag.
+          git tag -a "v$VER" -m "release $VER"
+          git push --follow-tags
 
-      - name: Create GitHub release
-        if: steps.tag.outputs.exists == 'false'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.version.outputs.tag }}
-          generate_release_notes: true
-          files: target/clj-qdrant-${{ steps.version.outputs.version }}.jar
-
-      - name: Deploy to Clojars
-        if: steps.clojars.outputs.published == 'false' && env.CLOJARS_USERNAME != ''
+      - name: Deploy
+        env:
+          CLOJARS_USERNAME: ${{ secrets.CLOJARS_USERNAME }}
+          CLOJARS_PASSWORD: ${{ secrets.CLOJARS_DEPLOY_TOKEN }}
         run: clojure -T:build deploy

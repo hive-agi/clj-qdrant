@@ -1,0 +1,6 @@
+{:lib      io.github.hive-agi/clj-qdrant
+ :minor    1
+ :license  {:name "MIT" :url "https://opensource.org/licenses/MIT"}
+ :scm-url  "https://github.com/hive-agi/clj-qdrant"
+ :src-dirs ["src"]
+ :publish  :clojars}
