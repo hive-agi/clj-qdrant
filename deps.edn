@@ -2,9 +2,8 @@
  :deps {org.clojure/clojure {:mvn/version "1.12.0"}
         io.qdrant/client    {:mvn/version "1.17.0"}}
  :aliases
- {:build {:deps {io.github.clojure/tools.build {:mvn/version "0.10.9"}
-                 slipset/deps-deploy           {:mvn/version "0.2.2"}}
-          :ns-default build}
+ {:build {:deps {io.github.hive-agi/hive-build {:mvn/version "0.1.0"}}
+          :ns-default hive-build.api}
   :test {:extra-paths ["test"]
          :extra-deps {io.github.cognitect-labs/test-runner
                       {:git/tag "v0.5.1" :git/sha "dfb30dd"}
