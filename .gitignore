@@ -3,3 +3,9 @@
 .lsp/
 target/
 .nrepl-port
+
+# clj-kondo --copy-configs re-imports this repo's OWN exported config from its own
+# classpath (resources/ is on :paths), so this copy regenerates on every classpath
+# refresh. Never track it: .clj-kondo/config.edn reads the export in resources/
+# directly, which is the single source.
+.clj-kondo/imports/io.github.hive-agi/clj-qdrant/

@@ -1,0 +1,6 @@
+;; This repo lints itself through its OWN exported config in resources/ — the
+;; single source. clj-kondo --copy-configs otherwise re-imports that export from
+;; the classpath into .clj-kondo/imports/io.github.hive-agi/<lib>/ and the repo
+;; lints through THAT copy, so a hook added to the export is invisible here.
+;; See [[20260821212413-74f930de]].
+{:config-paths ["../resources/clj-kondo.exports/io.github.hive-agi/clj-qdrant"]}
