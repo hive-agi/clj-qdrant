@@ -1,5 +1,14 @@
 # clj-qdrant
 
+<!-- hive-badges -->
+
+[![Clojars Project](https://img.shields.io/clojars/v/io.github.hive-agi/clj-qdrant.svg)](https://clojars.org/io.github.hive-agi/clj-qdrant)
+[![cljdoc](https://cljdoc.org/badge/io.github.hive-agi/clj-qdrant)](https://cljdoc.org/d/io.github.hive-agi/clj-qdrant/CURRENT)
+[![release](https://github.com/hive-agi/clj-qdrant/actions/workflows/release.yml/badge.svg)](https://github.com/hive-agi/clj-qdrant/actions/workflows/release.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+
+<!-- /hive-badges -->
+
 Idiomatic Clojure facade over the official
 [qdrant/java-client](https://github.com/qdrant/java-client).
 
