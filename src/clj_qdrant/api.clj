@@ -107,11 +107,34 @@
   "Delete points by id list.
 
    kw-args: :collection :ids"
-  [{:keys [client]} & {:keys [collection ids]}]
-  (.get (.deleteAsync client ^String collection (mapv ->point-id ids)))
+  [{:keys [client]} & {:keys [collection ids] :as opts}]
+  (when-not (contains? opts :ids)
+    (throw (ex-info "delete-points requires :ids"
+                    {:operation :delete :collection collection})))
+  (if (seq ids)
+    (do
+      (.get (.deleteAsync client ^String collection (mapv ->point-id ids)))
+      {:collection collection
+       :deleted    (count ids)
+       :submitted? true
+       :operation  :delete})
+    {:collection collection
+     :deleted    0
+     :submitted? false
+     :operation  :delete}))
+
+(defn delete-points-by-filter
+  "Delete points matching a Common$Filter.
+
+   kw-args: :collection :filter"
+  [{:keys [client]} & {:keys [collection filter]}]
+  (when-not (instance? Common$Filter filter)
+    (throw (ex-info "delete-points-by-filter requires :filter"
+                    {:operation :delete-by-filter :collection collection})))
+  (.get (.deleteAsync client ^String collection ^Common$Filter filter))
   {:collection collection
-   :deleted    (count ids)
-   :operation  :delete})
+   :submitted? true
+   :operation  :delete-by-filter})
 
 (defn get-points
   "Retrieve points by id list.
@@ -138,6 +161,8 @@
                                                     list-of-tags fields where
                                                     the caller wants every
                                                     listed tag present.
+     :must-not-keyword {field-name [string ...]}  — exclude rows matching any
+                                                    listed field/value pair.
      :must-match-any   {field-name [string ...]}  — OR over the list via
                                                     qdrant `matchKeywords`
                                                     (MatchAny). Use for
@@ -150,7 +175,7 @@
                                                     matches (explicit form).
 
    Returns a Common$Filter or nil if no conditions provided."
-  [{:keys [must-keyword must-match-any must-keywords-all]}]
+  [{:keys [must-keyword must-not-keyword must-match-any must-keywords-all]}]
   (let [b (Common$Filter/newBuilder)
         any-added? (atom false)]
     (doseq [[field values] must-keyword
@@ -167,6 +192,11 @@
       ;; supplied values. Required for HCR multi-scope `:project-id IN [...]`.
       (.addMust b (ConditionFactory/matchKeywords (name field)
                                                   ^java.util.List (mapv str values)))
+      (reset! any-added? true))
+    (doseq [[field values] must-not-keyword
+            :when (seq values)
+            v values]
+      (.addMustNot b (ConditionFactory/matchKeyword (name field) ^String v))
       (reset! any-added? true))
     (doseq [{:keys [field value]} must-keywords-all]
       (.addMust b (ConditionFactory/matchKeyword (name field) ^String value))

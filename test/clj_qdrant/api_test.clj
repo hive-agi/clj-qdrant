@@ -93,6 +93,54 @@
       (is (true? (:with-vectors @captured)))
       (is (nil? (:consistency @captured))))))
 
+(defn- delete-async-overloads
+  []
+  (->> (:members (reflect/reflect io.qdrant.client.QdrantClient))
+       (filter #(= 'deleteAsync (:name %)))
+       (map :parameter-types)
+       (map vec)
+       set))
+
+(deftest qdrant-client-has-filter-delete-overload
+  (is (contains? (delete-async-overloads)
+                 '[java.lang.String io.qdrant.client.grpc.Common$Filter])))
+
+(definterface IDeleteByFilterStub
+  (^java.util.concurrent.Future
+    deleteAsync [^String collection ^io.qdrant.client.grpc.Common$Filter filter]))
+
+(deftype DeleteByFilterStubClient [captured]
+  IDeleteByFilterStub
+  (deleteAsync [_ collection filter]
+    (reset! captured {:collection collection :filter filter})
+    (doto (CompletableFuture.) (.complete :ok))))
+
+(deftest delete-points-by-filter-uses-filter-overload
+  (let [captured (atom nil)
+        stub     (->DeleteByFilterStubClient captured)
+        filter   (api/->filter {:must-keyword {:project-id ["hive-carto"]}})
+        result   (api/delete-points-by-filter {:client stub}
+                                              :collection "carto-snippets"
+                                              :filter filter)]
+    (is (= "carto-snippets" (:collection result)))
+    (is (= :delete-by-filter (:operation result)))
+    (is (true? (:submitted? result)))
+    (is (= {:collection "carto-snippets" :filter filter} @captured))))
+
+(deftest delete-points-requires-explicit-ids
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                        #"requires :ids"
+                        (api/delete-points {:client nil}
+                                           :collection "carto-snippets"
+                                           :filter (api/->filter
+                                                    {:must-keyword
+                                                     {:project-id ["hive-carto"]}})))))
+
+(deftest filter-supports-must-not-keyword
+  (let [filter (api/->filter {:must-not-keyword
+                              {:tags ["expired" "tombstone"]}})]
+    (is (= 2 (.getMustNotCount filter)))))
+
 (deftest value-coercion
   (testing "primitives coerce to qdrant Value"
     (is (some? (#'api/->value "x")))
