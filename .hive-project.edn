@@ -1,0 +1,6 @@
+{:project-id "clj-qdrant"
+ :parent "hive"
+ :description "Idiomatic Clojure data-shape facade over the official qdrant/java-client. Transport concerns (gRPC, TLS, auth, keepalive) stay in the java client; this is maps-in/maps-out only."
+ :language :clojure
+ :tags ["vector-db" "qdrant" "client" "leaf"]
+ :carto {:source-roots ["resources" "src" "test"]}}
